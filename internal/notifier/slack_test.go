@@ -24,11 +24,10 @@ func newTestSlack(t *testing.T, handler http.HandlerFunc) *Slack {
 }
 
 func TestSlackNotify(t *testing.T) {
-	var gotChannel, gotText, gotAttachments string
+	var gotChannel, gotAttachments string
 	s := newTestSlack(t, func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		gotChannel = r.FormValue("channel")
-		gotText = r.FormValue("text")
 		gotAttachments = r.FormValue("attachments")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true,"channel":"C123","ts":"1234.5678"}`))
@@ -38,7 +37,7 @@ func TestSlackNotify(t *testing.T) {
 		Node:      "node-1",
 		Container: "web",
 		Image:     "nginx:latest",
-		Action:    "oom",
+		Action:    "die",
 		ExitCode:  "137",
 		Severity:  events.SeverityCritical,
 		Color:     "#e01e5a",
@@ -51,10 +50,8 @@ func TestSlackNotify(t *testing.T) {
 	if gotChannel != "C123" {
 		t.Errorf("channel = %q, want C123", gotChannel)
 	}
-	if gotText == "" {
-		t.Error("expected non-empty fallback text")
-	}
-	for _, want := range []string{"#e01e5a", "web", "nginx:latest", "137", "node-1"} {
+	// Natural-language card: reason title, plain-language body, Node/ footer.
+	for _, want := range []string{"ContainerDied", "exited unexpectedly", "#e01e5a", "web", "nginx:latest", "137", "node-1"} {
 		if !strings.Contains(gotAttachments, want) {
 			t.Errorf("attachments payload missing %q: %s", want, gotAttachments)
 		}

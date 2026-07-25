@@ -24,12 +24,12 @@ func NewSlack(token, channel string) *Slack {
 	return &Slack{client: slack.New(token), channel: channel}
 }
 
-// Notify posts a colour-coded attachment describing the abnormal event.
+// Notify posts a colour-coded attachment whose title is the event reason and
+// whose body describes what happened in plain language.
 func (s *Slack) Notify(ctx context.Context, n *events.Notification) error {
 	_, _, err := s.client.PostMessageContext(
 		ctx,
 		s.channel,
-		slack.MsgOptionText(fallbackText(n), false),
 		slack.MsgOptionAttachments(buildAttachment(n)),
 	)
 	if err != nil {
@@ -39,50 +39,53 @@ func (s *Slack) Notify(ctx context.Context, n *events.Notification) error {
 }
 
 func buildAttachment(n *events.Notification) slack.Attachment {
-	fields := []slack.AttachmentField{
-		{Title: "Node", Value: n.Node, Short: true},
-		{Title: "Container", Value: orDash(n.Container), Short: true},
-		{Title: "Image", Value: orDash(n.Image), Short: false},
-	}
-	if n.ExitCode != "" {
-		fields = append(fields, slack.AttachmentField{Title: "Exit Code", Value: n.ExitCode, Short: true})
-	}
-	if n.Signal != "" {
-		fields = append(fields, slack.AttachmentField{Title: "Signal", Value: n.Signal, Short: true})
-	}
-
+	sentence := describe(n)
 	return slack.Attachment{
-		Color:  n.Color,
-		Title:  title(n),
-		Fields: fields,
-		Footer: "docker-event-exporter",
-		Ts:     json.Number(strconv.FormatInt(n.Time.Unix(), 10)),
+		Color:    n.Color,
+		Title:    reason(n),
+		Text:     sentence,
+		Fallback: sentence,
+		Footer:   "Node/" + n.Node,
+		Ts:       json.Number(strconv.FormatInt(n.Time.Unix(), 10)),
 	}
 }
 
-func title(n *events.Notification) string {
-	emoji := "🔴"
-	if n.Severity == events.SeverityWarning {
-		emoji = "🟡"
-	}
-	return fmt.Sprintf("%s %s: %s", emoji, actionLabel(n.Action), orDash(n.Container))
-}
-
-func fallbackText(n *events.Notification) string {
-	return fmt.Sprintf("[%s] %s on %s (%s)", n.Severity, actionLabel(n.Action), n.Node, orDash(n.Container))
-}
-
-func actionLabel(action string) string {
+// reason is the short event name shown as the (bold) attachment title.
+func reason(n *events.Notification) string {
 	switch {
-	case action == "oom":
-		return "OOM"
-	case action == "die":
-		return "Container died"
-	case strings.HasPrefix(action, "health_status"):
-		return "Health check unhealthy"
+	case n.Action == "oom":
+		return "OOMKilled"
+	case n.Action == "die":
+		return "ContainerDied"
+	case strings.HasPrefix(n.Action, "health_status"):
+		return "Unhealthy"
 	default:
-		return action
+		return n.Action
 	}
+}
+
+// describe renders the event as a plain-language sentence.
+func describe(n *events.Notification) string {
+	subject := containerRef(n)
+	switch {
+	case n.Action == "oom":
+		return fmt.Sprintf("Container %s ran out of memory and was killed.", subject)
+	case n.Action == "die":
+		return fmt.Sprintf("Container %s exited unexpectedly with code %s.", subject, orDash(n.ExitCode))
+	case strings.HasPrefix(n.Action, "health_status"):
+		return fmt.Sprintf("Container %s failed its health check and is now unhealthy.", subject)
+	default:
+		return fmt.Sprintf("Container %s reported event %q.", subject, n.Action)
+	}
+}
+
+// containerRef names the container, appending its image when known.
+func containerRef(n *events.Notification) string {
+	name := orDash(n.Container)
+	if n.Image != "" {
+		return fmt.Sprintf("%s (%s)", name, n.Image)
+	}
+	return name
 }
 
 func orDash(s string) string {
