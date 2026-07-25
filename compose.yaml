@@ -11,4 +11,6 @@ services:
       NODE_NAME: ${NODE_NAME:-}
       EVENT_COOLDOWN: ${EVENT_COOLDOWN:-30s}
       IGNORE_EXIT_CODES: ${IGNORE_EXIT_CODES:-0}
+    cpus: 0.5
+    mem_limit: 32m
     restart: unless-stopped
