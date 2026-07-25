@@ -1,0 +1,14 @@
+services:
+  docker-event-exporter:
+    build: .
+    image: denpaio/docker-event-exporter:latest
+    container_name: docker-event-exporter
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:?SLACK_BOT_TOKEN is required}
+      SLACK_CHANNEL: ${SLACK_CHANNEL:?SLACK_CHANNEL is required}
+      NODE_NAME: ${NODE_NAME:-}
+      EVENT_COOLDOWN: ${EVENT_COOLDOWN:-30s}
+      IGNORE_EXIT_CODES: ${IGNORE_EXIT_CODES:-0}
+    restart: unless-stopped
