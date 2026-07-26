@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-const defaultCooldown = 30 * time.Second
+const (
+	defaultCooldown  = 30 * time.Second
+	defaultStopGrace = 30 * time.Second
+)
 
 // Config holds the validated runtime configuration.
 type Config struct {
@@ -16,6 +19,10 @@ type Config struct {
 	SlackChannel string
 	NodeName     string
 	Cooldown     time.Duration
+	// StopGrace is how long after a stop signal a container's death is still
+	// treated as an intentional stop (Ctrl-C, docker stop / compose down) rather
+	// than a crash worth notifying about.
+	StopGrace time.Duration
 	// IgnoreExitCodes is the set of container "die" exit codes that must NOT
 	// trigger a notification. Exit code "0" is always present.
 	IgnoreExitCodes map[string]struct{}
@@ -29,6 +36,7 @@ func Load() (*Config, error) {
 		SlackChannel:    os.Getenv("SLACK_CHANNEL"),
 		NodeName:        os.Getenv("NODE_NAME"),
 		Cooldown:        defaultCooldown,
+		StopGrace:       defaultStopGrace,
 		IgnoreExitCodes: parseIgnoreExitCodes(os.Getenv("IGNORE_EXIT_CODES")),
 	}
 
@@ -57,6 +65,14 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("invalid EVENT_COOLDOWN %q: %w", v, err)
 		}
 		cfg.Cooldown = d
+	}
+
+	if v := os.Getenv("STOP_GRACE"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid STOP_GRACE %q: %w", v, err)
+		}
+		cfg.StopGrace = d
 	}
 
 	return cfg, nil

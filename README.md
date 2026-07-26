@@ -9,7 +9,7 @@ dig.
 | Event | Condition | Severity |
 | --- | --- | --- |
 | `oom` | Container killed for running out of memory | 🔴 critical |
-| `die` | Container exited with a non-zero, non-ignored exit code | 🔴 critical |
+| `die` | Container exited with a non-zero, non-ignored exit code **without** a preceding stop signal | 🔴 critical |
 | `health_status: unhealthy` | Health check flipped to unhealthy | 🟡 warning |
 
 Everything else (start, stop, clean exits, `health_status: healthy`, …) is
@@ -17,6 +17,12 @@ ignored. Abnormality is decided **client-side** — the daemon is only asked for
 `type=container` events — which sidesteps the historically flaky server-side
 `health_status` filter. Repeated identical events for the same container are
 de-duplicated within `EVENT_COOLDOWN` (Docker can emit OOM events in bursts).
+
+An intentional stop (Ctrl-C, `docker stop`, `docker compose down`/`restart`) is
+**not** a crash: the daemon emits a `kill` (stop signal) event before the `die`,
+so any `die` that follows a stop signal within `STOP_GRACE` is suppressed —
+whatever exit code the container reports. A container that dies on its own has no
+preceding `kill`, so genuine crashes still notify.
 
 ## Configuration
 
@@ -28,15 +34,21 @@ All configuration is via environment variables:
 | `SLACK_CHANNEL` | ✅ | — | Channel ID (e.g. `C0123456789`) or `#channel-name` |
 | `NODE_NAME` | | container hostname | Host label shown in notifications |
 | `EVENT_COOLDOWN` | | `30s` | De-duplication window (Go duration) |
+| `STOP_GRACE` | | `30s` | Window after a stop signal in which a `die` counts as an intentional stop, not a crash (Go duration; `0` disables) |
 | `IGNORE_EXIT_CODES` | | `0` | Extra `die` exit codes to ignore (comma-separated); `0` is always ignored |
 | `DOCKER_HOST` | | `unix:///var/run/docker.sock` | Standard Docker env var |
 
 ### Reducing redeploy noise
 
-A container that does not exit cleanly on `docker stop`/redeploy ends with exit
-code `143` (SIGTERM) or `137` (SIGKILL) — both non-zero, so they notify by
-default. OOM has its own explicit `oom` event, so if the `die`-exit-137 noise is
-unwanted you can add `137,143` to `IGNORE_EXIT_CODES` without losing OOM alerts.
+Stops and redeploys are silenced automatically by the stop detection above,
+regardless of exit code — including apps that trap `SIGTERM` and exit non-zero
+(e.g. exit `1`), which is why filtering by exit code alone can't catch them. Set
+`STOP_GRACE` higher than your longest `stop_grace_period` so slow graceful
+shutdowns still fall inside the window; set it to `0` to turn detection off.
+
+`IGNORE_EXIT_CODES` remains for the separate case of a container that exits
+non-zero **on its own** for a benign reason (e.g. a one-shot job that returns
+`2`), where there is no stop signal to key off.
 
 ## Slack app setup
 

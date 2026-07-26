@@ -43,29 +43,45 @@ type Classifier struct {
 	node            string
 	ignoreExitCodes map[string]struct{}
 	cooldown        time.Duration
+	stopGrace       time.Duration
 
-	mu       sync.Mutex
-	lastSeen map[string]time.Time
-	now      func() time.Time // overridable clock for tests
+	mu          sync.Mutex
+	lastSeen    map[string]time.Time
+	recentKills map[string]time.Time // container ID -> time it last received a stop signal
+	now         func() time.Time     // overridable clock for tests
 }
 
 // NewClassifier constructs a Classifier. node labels the host in notifications,
-// ignoreExitCodes are container "die" exit codes to skip, and cooldown is the
-// de-duplication window (<= 0 disables de-duplication).
-func NewClassifier(node string, ignoreExitCodes map[string]struct{}, cooldown time.Duration) *Classifier {
+// ignoreExitCodes are container "die" exit codes to skip, cooldown is the
+// de-duplication window (<= 0 disables de-duplication), and stopGrace is how
+// long after a stop signal a container's death still counts as an intentional
+// stop rather than a crash (<= 0 disables stop detection).
+func NewClassifier(node string, ignoreExitCodes map[string]struct{}, cooldown, stopGrace time.Duration) *Classifier {
 	return &Classifier{
 		node:            node,
 		ignoreExitCodes: ignoreExitCodes,
 		cooldown:        cooldown,
+		stopGrace:       stopGrace,
 		lastSeen:        make(map[string]time.Time),
+		recentKills:     make(map[string]time.Time),
 		now:             time.Now,
 	}
 }
 
 // Classify returns a Notification when msg is an abnormal container event that
-// is not currently suppressed by the cooldown, otherwise nil.
+// is not currently suppressed, otherwise nil. A container death that follows a
+// stop signal within stopGrace is treated as an intentional stop and suppressed,
+// so Ctrl-C / "docker compose down" don't page as crashes.
 func (c *Classifier) Classify(msg dockerevents.Message) *Notification {
 	if msg.Type != dockerevents.ContainerEventType {
+		return nil
+	}
+
+	// A "kill" event is the daemon delivering a stop signal to the container
+	// (docker stop / compose down / restart, or an explicit docker kill). Record
+	// it so the "die" that follows is recognised as an intentional stop.
+	if msg.Action == dockerevents.ActionKill {
+		c.recordKill(msg.Actor.ID, eventTime(msg))
 		return nil
 	}
 
@@ -102,6 +118,9 @@ func (c *Classifier) build(msg dockerevents.Message) *Notification {
 		if _, ignored := c.ignoreExitCodes[attr["exitCode"]]; ignored {
 			return nil
 		}
+		if c.stoppedRecently(msg.Actor.ID, eventTime(msg)) {
+			return nil
+		}
 		return notify(SeverityCritical, colorCritical)
 	case dockerevents.ActionHealthStatusUnhealthy:
 		return notify(SeverityWarning, colorWarning)
@@ -128,6 +147,40 @@ func (c *Classifier) suppressed(containerID, action string) bool {
 	c.lastSeen[key] = now
 	c.reap(now)
 	return false
+}
+
+// recordKill notes that a container received a stop signal at t, dropping stale
+// records so the map stays bounded.
+func (c *Classifier) recordKill(containerID string, t time.Time) {
+	if c.stopGrace <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recentKills[containerID] = t
+	for id, kt := range c.recentKills {
+		if t.Sub(kt) >= c.stopGrace {
+			delete(c.recentKills, id)
+		}
+	}
+}
+
+// stoppedRecently reports whether the container received a stop signal within
+// stopGrace before dying, i.e. the death is an intentional stop rather than a
+// crash. It consumes the record so each stop is matched at most once. Events
+// arrive in daemon order, so a recorded kill always precedes the die.
+func (c *Classifier) stoppedRecently(containerID string, dieTime time.Time) bool {
+	if c.stopGrace <= 0 {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kt, ok := c.recentKills[containerID]
+	if !ok {
+		return false
+	}
+	delete(c.recentKills, containerID)
+	return dieTime.Sub(kt) < c.stopGrace
 }
 
 // reap drops entries whose cooldown has elapsed to bound memory usage.

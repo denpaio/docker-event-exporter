@@ -17,7 +17,7 @@ func containerMsg(action dockerevents.Action, attrs map[string]string) dockereve
 }
 
 func newClassifier() *Classifier {
-	return NewClassifier("node-1", map[string]struct{}{"0": {}}, 30*time.Second)
+	return NewClassifier("node-1", map[string]struct{}{"0": {}}, 30*time.Second, 30*time.Second)
 }
 
 func TestClassify_OOM(t *testing.T) {
@@ -52,6 +52,47 @@ func TestClassify_DieNonZeroExit(t *testing.T) {
 	}
 }
 
+func TestClassify_DieAfterStopSignalSuppressed(t *testing.T) {
+	c := newClassifier()
+	// docker stop / compose down / Ctrl-C: a kill (stop signal) precedes the die.
+	// The container may exit with any non-zero code (e.g. an app that traps
+	// SIGTERM and exits 1), so this must be recognised as an intentional stop.
+	kill := containerMsg(dockerevents.ActionKill, map[string]string{"name": "web", "signal": "15"})
+	if n := c.Classify(kill); n != nil {
+		t.Fatalf("kill should not notify, got %+v", n)
+	}
+	die := containerMsg(dockerevents.ActionDie, map[string]string{"name": "web", "exitCode": "1"})
+	if n := c.Classify(die); n != nil {
+		t.Fatalf("die after a stop signal should be suppressed, got %+v", n)
+	}
+}
+
+func TestClassify_DieLongAfterStopSignalNotifies(t *testing.T) {
+	c := newClassifier()
+	kill := containerMsg(dockerevents.ActionKill, map[string]string{"name": "web", "signal": "15"})
+	c.Classify(kill)
+	// A death well outside the grace window is unrelated to the earlier stop
+	// signal and must still be reported as a crash.
+	die := containerMsg(dockerevents.ActionDie, map[string]string{"name": "web", "exitCode": "1"})
+	die.TimeNano = kill.TimeNano + int64(2*time.Minute)
+	if n := c.Classify(die); n == nil {
+		t.Fatal("die long after a stop signal should notify as a crash")
+	}
+}
+
+func TestClassify_StopSignalMatchedOncePerContainer(t *testing.T) {
+	c := newClassifier()
+	c.Classify(containerMsg(dockerevents.ActionKill, map[string]string{"name": "web", "signal": "15"}))
+	if n := c.Classify(containerMsg(dockerevents.ActionDie, map[string]string{"name": "web", "exitCode": "1"})); n != nil {
+		t.Fatalf("first die after stop should be suppressed, got %+v", n)
+	}
+	// A later, independent crash of the same container (no fresh stop signal)
+	// must not be swallowed by a stale kill record.
+	if n := c.Classify(containerMsg(dockerevents.ActionDie, map[string]string{"name": "web", "exitCode": "1"})); n == nil {
+		t.Fatal("a subsequent crash without a new stop signal should notify")
+	}
+}
+
 func TestClassify_Unhealthy(t *testing.T) {
 	c := newClassifier()
 	n := c.Classify(containerMsg(dockerevents.ActionHealthStatusUnhealthy, map[string]string{"name": "web"}))
@@ -78,7 +119,7 @@ func TestClassify_Ignored(t *testing.T) {
 }
 
 func TestClassify_CustomIgnoreExitCodes(t *testing.T) {
-	c := NewClassifier("node-1", map[string]struct{}{"0": {}, "143": {}}, 30*time.Second)
+	c := NewClassifier("node-1", map[string]struct{}{"0": {}, "143": {}}, 30*time.Second, 30*time.Second)
 	if n := c.Classify(containerMsg(dockerevents.ActionDie, map[string]string{"name": "web", "exitCode": "143"})); n != nil {
 		t.Fatalf("expected 143 to be ignored, got %+v", n)
 	}

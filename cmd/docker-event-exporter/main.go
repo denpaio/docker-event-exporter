@@ -52,13 +52,14 @@ func main() {
 	}
 	defer func() { _ = dockerClient.Close() }()
 
-	classifier := events.NewClassifier(cfg.NodeName, cfg.IgnoreExitCodes, cfg.Cooldown)
+	classifier := events.NewClassifier(cfg.NodeName, cfg.IgnoreExitCodes, cfg.Cooldown, cfg.StopGrace)
 	watcher := events.NewWatcher(dockerClient, classifier, slackNotifier, logger)
 
 	logger.Info("starting docker-event-exporter",
 		slog.String("node", cfg.NodeName),
 		slog.String("channel", cfg.SlackChannel),
 		slog.Duration("cooldown", cfg.Cooldown),
+		slog.Duration("stopGrace", cfg.StopGrace),
 	)
 
 	if err := watcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
