@@ -13,4 +13,4 @@ services:
       IGNORE_EXIT_CODES: ${IGNORE_EXIT_CODES:-0}
     cpus: 0.5
     mem_limit: 32m
-    restart: unless-stopped
+    restart: always
