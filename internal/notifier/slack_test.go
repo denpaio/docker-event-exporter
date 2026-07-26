@@ -50,7 +50,7 @@ func TestSlackNotify(t *testing.T) {
 	if gotChannel != "C123" {
 		t.Errorf("channel = %q, want C123", gotChannel)
 	}
-	// Natural-language card: reason title, plain-language body, Node/ footer.
+	// Natural-language card: reason title, plain-language body, node footer.
 	for _, want := range []string{"ContainerDied", "exited unexpectedly", "#e01e5a", "web", "nginx:latest", "137", "node-1"} {
 		if !strings.Contains(gotAttachments, want) {
 			t.Errorf("attachments payload missing %q: %s", want, gotAttachments)

@@ -45,7 +45,7 @@ func buildAttachment(n *events.Notification) slack.Attachment {
 		Title:    reason(n),
 		Text:     sentence,
 		Fallback: sentence,
-		Footer:   "Node/" + n.Node,
+		Footer:   n.Node,
 		Ts:       json.Number(strconv.FormatInt(n.Time.Unix(), 10)),
 	}
 }
